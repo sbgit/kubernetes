@@ -114,3 +114,65 @@ then
   sshpass -p "kubeadmin" scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no kmaster.lxd:/joincluster.sh /joincluster.sh 2>/tmp/joincluster.log
   bash /joincluster.sh >> /tmp/joincluster.log 2>&1
 fi
+
+
+
+##################################
+# Setup Kubectl for LXD host (optional)
+##################################
+if [[ $(hostname) =~ .*thisIsJustASampleAlwaysSkip ]]
+then
+  echo "[TASK 1] Setup Kubectl on lxd host"
+  curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+  sudo apt-add-repository "deb http://apt.kubernetes.io/ kubernetes-xenial main" 
+  sudo apt install -qq -y kubectl=1.23.0-00
+  mkdir ~/.kube
+  ## If pull does not work use exec
+  ## lxc file pull kmaster/etc/kubernetes/admin.conf ~/.kube/config
+  echo "cat /etc/kubernetes/admin.conf" | lxc exec kmaster bash >  ~/.kube/config
+  ### ubuntu@ip-10-22-x-x:~$ kubectl get nodes
+  ### NAME       STATUS   ROLES                  AGE     VERSION
+  ### kmaster    Ready    control-plane,master   2d20h   v1.23.0
+  ### kworker1   Ready    <none>                 2d20h   v1.23.0
+  ### kworker2   Ready    <none>
+
+
+  
+  # https://github.com/kubernetes/dashboard/
+  kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.4.0/aio/deploy/recommended.yaml
+
+  kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+ name: admin-user
+ namespace: kubernetes-dashboard
+EOF
+
+  kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: admin-user
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: admin-user
+  namespace: kubernetes-dashboard
+EOF
+
+  # Setup proxy for dashboard access on port 8001
+  kubectl proxy
+
+  # Forward LXC 
+  # lxc config device add kmaster myport18001 proxy listen=tcp:0.0.0.0:18001 connect=tcp:127.0.0.1:8001
+
+  # Get token for dashboard
+  ## token=$(kubectl -n kube-system get secret | grep default-token | cut -d " " -f1)
+  ## kubectl -n kube-system describe secret $token
+  kubectl -n kubernetes-dashboard get secret $(kubectl -n kubernetes-dashboard get sa/admin-user -o jsonpath="{.secrets[0].name}") -o go-template="{{.data.token | base64decode}}"
+fi
+
